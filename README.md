@@ -12,6 +12,10 @@ go build -o emudhra-ca-check .
 
 The checker creates but never starts a container and streams its exported filesystem. It parses PEM certificates using Go's x509 library, matching affected root and intermediate SPKI SHA-256 identities, including Sectigo's `AAA Certificate Services` cross-signing route, with certificate SHA-256 fingerprints and paths. Temporary containers are removed afterward.
 
+Text output labels potential exposure (affected certificates or below-minimum Go versions) as **CRITICAL**, parsing problems and incomplete scan results as **UNKNOWN**, and inventory details as **INFO**. Colors are red for **CRITICAL**, orange for **WARNING**, white for **INFO**, and blue for **UNKNOWN**. Colors are disabled for redirected output, `TERM=dumb`, or when `NO_COLOR` is set. These labels do not prove runtime exploitability. JSON fields and exit codes are unchanged.
+
+An `unterminated PEM` warning means a PEM start marker was found without a complete block. Executables and libraries can contain such markers as embedded strings; this is **not evidence of an affected certificate**. Inspection of that file is incomplete, so the warning remains relevant even when other findings take precedence in the overall result.
+
 Exit codes:
 - **0**: no matching certificates in scanned PEM files (not proof of safety).
 - **1**: potential exposure detected.

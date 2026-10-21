@@ -15,6 +15,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 const maxFile = 32 << 20
@@ -181,6 +183,47 @@ func check(image string) (report, error) {
 	out.Image, out.ImageID = image, id
 	return out, nil
 }
+func reportLevel(status string) string {
+	switch status {
+	case "potential-exposure":
+		return "CRITICAL"
+	case "inconclusive":
+		return "UNKNOWN"
+	default:
+		return "INFO"
+	}
+}
+
+// levelLabel keeps redirected output readable and honors NO_COLOR.
+func levelLabel(level string, stream *os.File) string {
+	label := "[" + level + "]"
+	_, noColor := os.LookupEnv("NO_COLOR")
+	if noColor || os.Getenv("TERM") == "dumb" || !term.IsTerminal(int(stream.Fd())) {
+		return label
+	}
+	return colorLevel(level) + label + "\x1b[0m"
+}
+
+func colorLevel(level string) string {
+	switch level {
+	case "CRITICAL":
+		return "\x1b[31m"
+	case "WARNING":
+		return "\x1b[38;5;208m"
+	case "UNKNOWN":
+		return "\x1b[34m"
+	default:
+		return "\x1b[37m"
+	}
+}
+
+func scanWarning(message string) string {
+	if strings.HasSuffix(message, ": unterminated PEM") {
+		return message + " (PEM start marker without a complete block; may be an embedded string in a binary, not evidence of an affected certificate; PEM inspection of this file is incomplete)"
+	}
+	return message
+}
+
 func run() int {
 	asJSON := flag.Bool("json", false, "Output JSON")
 	flag.Usage = func() {
@@ -205,23 +248,29 @@ func run() int {
 			return 2
 		}
 	} else {
-		fmt.Printf("%s: %s\nPEM/JKS certificates scanned: %d\n", out.Image, out.Status, out.Certificates)
+		fmt.Printf("%s %s: %s\n%s PEM/JKS certificates scanned: %d\n", levelLabel(reportLevel(out.Status), os.Stdout), out.Image, out.Status, levelLabel("INFO", os.Stdout), out.Certificates)
 		for _, f := range out.Findings {
-			fmt.Printf("  %s: %s\n    %s\n    SHA256: %s\n", f.Path, f.Reason, f.Subject, f.SHA256)
+			fmt.Printf("%s %s: %s\n    %s\n    SHA256: %s\n", levelLabel("CRITICAL", os.Stdout), f.Path, f.Reason, f.Subject, f.SHA256)
 		}
 		for _, b := range out.GoBinaries {
-			fmt.Printf("  %s: Go %s (%s)\n", b.Path, b.Version, b.Status)
+			level := "INFO"
+			if b.Status == "below-minimum" {
+				level = "CRITICAL"
+			} else if b.Status == "unknown" {
+				level = "UNKNOWN"
+			}
+			fmt.Printf("%s %s: Go %s (%s)\n", levelLabel(level, os.Stdout), b.Path, b.Version, b.Status)
 		}
 		for _, e := range out.Errors {
-			fmt.Fprintln(os.Stderr, e)
+			fmt.Fprintln(os.Stdout, levelLabel("UNKNOWN", os.Stdout), scanWarning(e))
 		}
 		for _, p := range out.Skipped {
-			fmt.Fprintln(os.Stderr, "Not scanned (>32 MiB):", p)
+			fmt.Fprintln(os.Stdout, levelLabel("UNKNOWN", os.Stdout), "Not scanned (>32 MiB):", p)
 		}
 		if out.NodePolicy != "" {
-			fmt.Println("Node:", out.NodePolicy)
+			fmt.Println(levelLabel("INFO", os.Stdout), "Node:", out.NodePolicy)
 		}
-		fmt.Println(out.Limitations)
+		fmt.Println(levelLabel("INFO", os.Stdout), out.Limitations)
 	}
 	if len(out.Findings) > 0 || out.hasOldGo() {
 		return 1
