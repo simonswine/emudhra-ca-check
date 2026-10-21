@@ -27,20 +27,21 @@ type finding struct {
 	Reason  string `json:"reason"`
 }
 type report struct {
-	NodeDetected bool      `json:"node_detected"`
-	NodePolicy   string    `json:"node_ca_policy,omitempty"`
-	Image        string    `json:"image"`
-	ImageID      string    `json:"image_id"`
-	Status       string    `json:"status"`
-	Certificates int       `json:"pem_certificates_scanned"`
-	Findings     []finding `json:"findings"`
-	Errors       []string  `json:"errors"`
-	Skipped      []string  `json:"oversized_files_not_scanned"`
-	Limitations  string    `json:"limitations"`
+	GoBinaries   []goBinary `json:"go_binaries"`
+	NodeDetected bool       `json:"node_detected"`
+	NodePolicy   string     `json:"node_ca_policy,omitempty"`
+	Image        string     `json:"image"`
+	ImageID      string     `json:"image_id"`
+	Status       string     `json:"status"`
+	Certificates int        `json:"pem_certificates_scanned"`
+	Findings     []finding  `json:"findings"`
+	Errors       []string   `json:"errors"`
+	Skipped      []string   `json:"oversized_files_not_scanned"`
+	Limitations  string     `json:"limitations"`
 }
 
 func scan(r io.Reader) (report, error) {
-	out := report{Limitations: limitations, Findings: []finding{}, Errors: []string{}, Skipped: []string{}}
+	out := report{GoBinaries: []goBinary{}, Limitations: limitations, Findings: []finding{}, Errors: []string{}, Skipped: []string{}}
 	tr := tar.NewReader(r)
 	for {
 		h, err := tr.Next()
@@ -79,6 +80,18 @@ func scan(r io.Reader) (report, error) {
 					visit(c)
 				}
 			}
+		} else if executableMagic(magic) {
+			binary, e := scanExecutable(br, func(r io.Reader) error { return scanPEM(r, visit) })
+			if e != nil {
+				out.Errors = append(out.Errors, h.Name+": "+e.Error())
+			}
+			if binary != nil {
+				binary.Path = "/" + strings.TrimLeft(h.Name, "/")
+				out.GoBinaries = append(out.GoBinaries, *binary)
+				if binary.Status == "unknown" {
+					out.Errors = append(out.Errors, binary.Path+": unrecognized Go release: "+binary.Version)
+				}
+			}
 		} else if e := scanPEM(br, visit); e != nil {
 			out.Errors = append(out.Errors, h.Name+": "+e.Error())
 		}
@@ -90,7 +103,7 @@ func scan(r io.Reader) (report, error) {
 	if out.Certificates == 0 || len(out.Errors) > 0 || len(out.Skipped) > 0 {
 		out.Status = "inconclusive"
 	}
-	if len(out.Findings) > 0 {
+	if len(out.Findings) > 0 || out.hasOldGo() {
 		out.Status = "potential-exposure"
 	}
 	return out, nil
@@ -160,7 +173,7 @@ func check(image string) (report, error) {
 		out.NodePolicy = nodePolicy(config)
 		if out.NodePolicy != "system CA requested; runtime overrides remain possible" {
 			out.Errors = append(out.Errors, "Node embedded CA trust is not verified: "+out.NodePolicy)
-			if len(out.Findings) == 0 {
+			if len(out.Findings) == 0 && !out.hasOldGo() {
 				out.Status = "inconclusive"
 			}
 		}
@@ -196,6 +209,9 @@ func run() int {
 		for _, f := range out.Findings {
 			fmt.Printf("  %s: %s\n    %s\n    SHA256: %s\n", f.Path, f.Reason, f.Subject, f.SHA256)
 		}
+		for _, b := range out.GoBinaries {
+			fmt.Printf("  %s: Go %s (%s)\n", b.Path, b.Version, b.Status)
+		}
 		for _, e := range out.Errors {
 			fmt.Fprintln(os.Stderr, e)
 		}
@@ -207,7 +223,7 @@ func run() int {
 		}
 		fmt.Println(out.Limitations)
 	}
-	if len(out.Findings) > 0 {
+	if len(out.Findings) > 0 || out.hasOldGo() {
 		return 1
 	}
 	if out.Status == "inconclusive" {

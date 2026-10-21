@@ -17,6 +17,12 @@ Exit codes:
 - **1**: potential exposure detected.
 - **2**: failure or inconclusive scan (including no parsed certificates).
 
+## Go binaries
+
+Executable files are also inspected for Go build metadata without running them. Text and JSON output list each detected binary's path, Go version and minimum-version result. Go 1.26 requires **1.26.10+**, Go 1.27 requires **1.27.3+**, and stable Go 1.28+ qualifies. Older releases trigger potential exposure (exit 1); development, prerelease and unrecognized versions are inconclusive. This checks toolchain metadata, not actual runtime trust behavior or vendor backports.
+
+Executable candidates are temporarily spooled to disk (including large binaries) and removed after inspection. Missing or unreadable build metadata cannot establish that a file is a Go binary; packed or modified binaries may evade detection. A qualifying Go version does not override certificate findings or other inconclusive checks.
+
 ## Limitations
 
 This is a cryptographic public-key identity inventory, not an end-to-end TLS verification test. A certificate's presence does not establish that an application trusts it. Conversely, absent matches do not establish safety. Unrelated eMudhra G1/C1/C3 keys are not flagged; subject names alone never establish identity.
